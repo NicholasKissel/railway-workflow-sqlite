@@ -20,7 +20,7 @@ async function main() {
 
   const tasks = await taskManager.getPendingTasks();
   console.log("Tasks:", tasks);
-  console.log("\nDone! Check the Rivet dashboard for 'workflow-demo' actor");
+  console.log("\nDone! Check the Rivet dashboard for 'workflow-sqlite-demo' actor");
 }
 
 main().catch(console.error);
