@@ -1,5 +1,4 @@
 import { actor, queue, setup } from "rivetkit";
-import { db } from "rivetkit/db";
 import { workflow } from "rivetkit/workflow";
 
 // Task types
@@ -20,10 +19,12 @@ type TaskMessage = {
 };
 
 /**
- * Task Manager Actor with Workflow + SQLite
+ * Task Manager Actor with Workflow
  *
  * Uses workflow for durable, visualizable execution
- * Uses SQLite for persistent task storage (enables Database Studio)
+ * Uses c.state for persistence (works on Railway + Rivet Cloud)
+ *
+ * Note: SQLite (c.db) requires deploying directly to Rivet infrastructure
  */
 export const taskManager = actor({
   options: {
@@ -32,25 +33,11 @@ export const taskManager = actor({
   },
 
   state: {
+    tasks: [] as Task[],
+    nextId: 1,
     tasksCreated: 0,
     tasksCompleted: 0,
   },
-
-  // SQLite database configuration
-  db: db({
-    onMigrate: async (database) => {
-      await database.execute(`
-        CREATE TABLE IF NOT EXISTS tasks (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          title TEXT NOT NULL,
-          priority TEXT NOT NULL DEFAULT 'medium',
-          status TEXT NOT NULL DEFAULT 'pending',
-          created_at INTEGER NOT NULL,
-          completed_at INTEGER
-        )
-      `);
-    },
-  }),
 
   queues: {
     tasks: queue<TaskMessage>(),
@@ -65,50 +52,42 @@ export const taskManager = actor({
       // Process based on action type
       if (message.body.action === "create" && message.body.title) {
         await loopCtx.step("create-task", async () => {
-          await loopCtx.db.execute(
-            `INSERT INTO tasks (title, priority, status, created_at) VALUES (?, ?, 'pending', ?)`,
-            message.body.title!,
-            message.body.priority || "medium",
-            Date.now()
-          );
+          const task: Task = {
+            id: loopCtx.state.nextId++,
+            title: message.body.title!,
+            priority: message.body.priority || "medium",
+            status: "pending",
+            createdAt: Date.now(),
+          };
+          loopCtx.state.tasks.push(task);
           loopCtx.state.tasksCreated += 1;
         });
       }
 
       if (message.body.action === "complete" && message.body.taskId) {
         await loopCtx.step("complete-task", async () => {
-          await loopCtx.db.execute(
-            `UPDATE tasks SET status = 'completed', completed_at = ? WHERE id = ? AND status = 'pending'`,
-            Date.now(),
-            message.body.taskId
-          );
-          loopCtx.state.tasksCompleted += 1;
+          const task = loopCtx.state.tasks.find(t => t.id === message.body.taskId);
+          if (task) {
+            task.status = "completed";
+            task.completedAt = Date.now();
+            loopCtx.state.tasksCompleted += 1;
+          }
         });
       }
     });
   }),
 
   actions: {
-    getTasks: async (c): Promise<Task[]> => {
-      const rows = await c.db.execute(
-        `SELECT id, title, priority, status, created_at as createdAt, completed_at as completedAt
-         FROM tasks ORDER BY created_at DESC`
-      );
-      return rows as Task[];
+    getTasks: (c): Task[] => {
+      return [...c.state.tasks].sort((a, b) => b.createdAt - a.createdAt);
     },
 
-    getPendingTasks: async (c) => {
-      const rows = await c.db.execute(
-        `SELECT id, title, priority FROM tasks
-         WHERE status = 'pending'
-         ORDER BY
-           CASE priority
-             WHEN 'high' THEN 1
-             WHEN 'medium' THEN 2
-             WHEN 'low' THEN 3
-           END`
-      );
-      return rows as { id: number; title: string; priority: string }[];
+    getPendingTasks: (c) => {
+      const priorityOrder = { high: 1, medium: 2, low: 3 };
+      return c.state.tasks
+        .filter(t => t.status === "pending")
+        .sort((a, b) => priorityOrder[a.priority] - priorityOrder[b.priority])
+        .map(t => ({ id: t.id, title: t.title, priority: t.priority }));
     },
 
     getStats: (c) => ({
