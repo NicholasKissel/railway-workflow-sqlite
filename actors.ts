@@ -1,4 +1,5 @@
 import { actor, queue, setup } from "rivetkit";
+import { workflow } from "rivetkit/workflow";
 
 // Task types
 interface Task {
@@ -18,10 +19,9 @@ type TaskMessage = {
 };
 
 /**
- * Task Manager Actor
+ * Task Manager Actor with Workflow
  *
- * Uses c.state for persistence (works with Rivet Cloud)
- * For SQLite, deploy directly on Rivet infrastructure
+ * Uses workflow for durable, visualizable execution
  */
 export const taskManager = actor({
   options: {
@@ -40,30 +40,39 @@ export const taskManager = actor({
     tasks: queue<TaskMessage>(),
   },
 
-  run: async (c) => {
-    for await (const message of c.queue.iter()) {
+  // Workflow-wrapped run loop for visualization
+  run: workflow(async (ctx) => {
+    await ctx.loop("task-processor", async (loopCtx) => {
+      // Wait for next task message
+      const message = await loopCtx.queue.next("wait-task");
+
+      // Process based on action type
       if (message.body.action === "create" && message.body.title) {
-        const task: Task = {
-          id: c.state.nextId++,
-          title: message.body.title,
-          priority: message.body.priority || "medium",
-          status: "pending",
-          createdAt: Date.now(),
-        };
-        c.state.tasks.push(task);
-        c.state.tasksCreated += 1;
+        await loopCtx.step("create-task", async () => {
+          const task: Task = {
+            id: loopCtx.state.nextId++,
+            title: message.body.title!,
+            priority: message.body.priority || "medium",
+            status: "pending",
+            createdAt: Date.now(),
+          };
+          loopCtx.state.tasks.push(task);
+          loopCtx.state.tasksCreated += 1;
+        });
       }
 
       if (message.body.action === "complete" && message.body.taskId) {
-        const task = c.state.tasks.find(t => t.id === message.body.taskId);
-        if (task) {
-          task.status = "completed";
-          task.completedAt = Date.now();
-          c.state.tasksCompleted += 1;
-        }
+        await loopCtx.step("complete-task", async () => {
+          const task = loopCtx.state.tasks.find(t => t.id === message.body.taskId);
+          if (task) {
+            task.status = "completed";
+            task.completedAt = Date.now();
+            loopCtx.state.tasksCompleted += 1;
+          }
+        });
       }
-    }
-  },
+    });
+  }),
 
   actions: {
     getTasks: (c) => {
