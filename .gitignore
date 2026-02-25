@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.env
+*.log
+
+# Claude/skill files (not needed for deployment)
+.claude/
+.agents/
+.pi/
+skills/
+skills-lock.json

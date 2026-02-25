@@ -1,0 +1,20 @@
+{
+  "name": "rivet-workflow-sqlite-example",
+  "type": "module",
+  "scripts": {
+    "dev": "npx tsx watch server.ts",
+    "start": "npx tsx server.ts",
+    "client": "npx tsx client.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.19.9",
+    "@hono/node-ws": "^1.3.0",
+    "hono": "^4.7.0",
+    "rivetkit": "2.1.0-rc.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  }
+}
