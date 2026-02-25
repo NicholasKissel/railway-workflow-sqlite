@@ -1,7 +1,15 @@
 import { actor, queue, setup } from "rivetkit";
-import { db } from "rivetkit/db";
 
-// Task message type
+// Task types
+interface Task {
+  id: number;
+  title: string;
+  priority: "low" | "medium" | "high";
+  status: "pending" | "completed";
+  createdAt: number;
+  completedAt?: number;
+}
+
 type TaskMessage = {
   action: "create" | "complete";
   title?: string;
@@ -12,10 +20,8 @@ type TaskMessage = {
 /**
  * Task Manager Actor
  *
- * Demonstrates:
- * - SQLite for persistent task storage
- * - Queue-driven mutations with run loop
- * - State persistence across restarts
+ * Uses c.state for persistence (works with Rivet Cloud)
+ * For SQLite, deploy directly on Rivet infrastructure
  */
 export const taskManager = actor({
   options: {
@@ -23,89 +29,55 @@ export const taskManager = actor({
     icon: "tasks",
   },
 
-  // SQLite database with task table
-  db: db({
-    onMigrate: async (database) => {
-      await database.execute(`
-        CREATE TABLE IF NOT EXISTS tasks (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          title TEXT NOT NULL,
-          priority TEXT NOT NULL DEFAULT 'medium',
-          status TEXT NOT NULL DEFAULT 'pending',
-          created_at INTEGER NOT NULL,
-          completed_at INTEGER
-        );
-      `);
-
-      await database.execute(`
-        CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
-      `);
-    },
-  }),
-
-  // Track stats in state (persisted across restarts)
   state: {
+    tasks: [] as Task[],
+    nextId: 1,
     tasksCreated: 0,
     tasksCompleted: 0,
   },
 
-  // Queue for task operations (durable)
   queues: {
     tasks: queue<TaskMessage>(),
   },
 
-  // Run loop that processes queue messages
   run: async (c) => {
     for await (const message of c.queue.iter()) {
       if (message.body.action === "create" && message.body.title) {
-        await c.db.execute(
-          "INSERT INTO tasks (title, priority, status, created_at) VALUES (?, ?, 'pending', ?)",
-          message.body.title,
-          message.body.priority || "medium",
-          Date.now()
-        );
+        const task: Task = {
+          id: c.state.nextId++,
+          title: message.body.title,
+          priority: message.body.priority || "medium",
+          status: "pending",
+          createdAt: Date.now(),
+        };
+        c.state.tasks.push(task);
         c.state.tasksCreated += 1;
       }
 
       if (message.body.action === "complete" && message.body.taskId) {
-        await c.db.execute(
-          "UPDATE tasks SET status = 'completed', completed_at = ? WHERE id = ?",
-          Date.now(),
-          message.body.taskId
-        );
-        c.state.tasksCompleted += 1;
+        const task = c.state.tasks.find(t => t.id === message.body.taskId);
+        if (task) {
+          task.status = "completed";
+          task.completedAt = Date.now();
+          c.state.tasksCompleted += 1;
+        }
       }
     }
   },
 
-  // Read-only actions for querying tasks
   actions: {
-    // Get all tasks
-    getTasks: async (c) => {
-      return (await c.db.execute(
-        "SELECT id, title, priority, status, created_at, completed_at FROM tasks ORDER BY created_at DESC"
-      )) as Array<{
-        id: number;
-        title: string;
-        priority: string;
-        status: string;
-        created_at: number;
-        completed_at: number | null;
-      }>;
+    getTasks: (c) => {
+      return [...c.state.tasks].sort((a, b) => b.createdAt - a.createdAt);
     },
 
-    // Get pending tasks only
-    getPendingTasks: async (c) => {
-      return (await c.db.execute(
-        "SELECT id, title, priority FROM tasks WHERE status = 'pending' ORDER BY CASE priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END"
-      )) as Array<{
-        id: number;
-        title: string;
-        priority: string;
-      }>;
+    getPendingTasks: (c) => {
+      const priorityOrder = { high: 1, medium: 2, low: 3 };
+      return c.state.tasks
+        .filter(t => t.status === "pending")
+        .sort((a, b) => priorityOrder[a.priority] - priorityOrder[b.priority])
+        .map(t => ({ id: t.id, title: t.title, priority: t.priority }));
     },
 
-    // Get stats
     getStats: (c) => ({
       tasksCreated: c.state.tasksCreated,
       tasksCompleted: c.state.tasksCompleted,
