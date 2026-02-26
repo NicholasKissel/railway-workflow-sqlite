@@ -133,7 +133,7 @@ app.get("/", (c) => {
       <div id="tasks"><div class="loading">Loading...</div></div>
 
       <script type="module">
-        import { createClient } from "https://esm.sh/rivetkit@2.1.1/client";
+        import { createClient } from "https://esm.sh/rivetkit@2.1.3/client";
 
         const client = createClient({
           endpoint: window.location.origin + "/api/rivet",
